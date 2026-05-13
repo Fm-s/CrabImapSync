@@ -154,6 +154,7 @@ pub async fn sync_folder(
     let started = std::time::Instant::now();
 
     for (idx, uid) in to_copy.iter().copied().enumerate() {
+        tracing::debug!(folder, uid, idx, "fetching full body");
         match fetch_full_with_reconnect(src, uid, opts.timeout).await {
             Ok(Some(msg)) => {
                 let too_big = opts

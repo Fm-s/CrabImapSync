@@ -74,7 +74,7 @@ pub struct Cli {
     pub max_message_size: Option<u64>,
     #[arg(long, default_value_t = false)]
     pub dry_run: bool,
-    #[arg(long, default_value_t = 300)]
+    #[arg(long, default_value_t = 60)]
     pub timeout_secs: u64,
     #[arg(long, default_value_t = 3)]
     pub retries: u32,
