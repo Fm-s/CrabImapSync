@@ -27,7 +27,7 @@ futures = "0.3"
 
 clap = { version = "4", features = ["derive", "env"] }
 
-oauth2 = "5"
+oauth2 = { version = "5", features = ["reqwest-blocking"] }
 tiny_http = "0.12"
 webbrowser = "1"
 keyring = "3"
