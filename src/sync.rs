@@ -6,6 +6,7 @@ use crate::oauth::{obtain_token, OAuthRequest, Provider};
 use crate::progress::Reporter;
 use globset::{Glob, GlobSet, GlobSetBuilder};
 use std::str::FromStr;
+use std::time::Duration;
 
 pub fn build_globset(patterns: &[String]) -> Result<Option<GlobSet>> {
     if patterns.is_empty() {
@@ -42,6 +43,8 @@ pub struct FolderStats {
 pub struct SyncOptions {
     pub max_message_size: Option<u64>,
     pub dry_run: bool,
+    pub timeout: Duration,
+    pub retries: u32,
 }
 
 pub async fn sync_folder(
@@ -83,9 +86,12 @@ pub async fn sync_folder(
 
     for (idx, uid) in src_uids.iter().copied().enumerate() {
         // 1. Cheap: fetch only Message-Id header to decide if we need the body.
-        let probe_id = match src.fetch_message_id_by_uid(uid).await {
-            Ok(id) => id,
-            Err(e) => {
+        let probe_result = tokio::time::timeout(opts.timeout, src.fetch_message_id_by_uid(uid))
+            .await
+            .map_err(|_| Error::Network(format!("probe timeout for uid {uid}")));
+        let probe_id = match probe_result {
+            Ok(Ok(id)) => id,
+            Ok(Err(e)) | Err(e) => {
                 stats.failed += 1;
                 tracing::warn!(folder = folder, uid, error = %e, "message-id probe failed");
                 bar.inc(1);
@@ -108,8 +114,11 @@ pub async fn sync_folder(
         }
 
         // 3. Not a duplicate (or no Message-Id at all): fetch the full body.
-        match src.fetch_full_by_uid(uid).await {
-            Ok(Some(msg)) => {
+        let fetch_result = tokio::time::timeout(opts.timeout, src.fetch_full_by_uid(uid))
+            .await
+            .map_err(|_| Error::Network(format!("fetch timeout for uid {uid}")));
+        match fetch_result {
+            Ok(Ok(Some(msg))) => {
                 let too_big = opts
                     .max_message_size
                     .map(|m| msg.body.len() as u64 > m)
@@ -121,18 +130,21 @@ pub async fn sync_folder(
                 }
 
                 if !opts.dry_run {
-                    match dst
-                        .append_message(folder, &msg.body, &msg.flags, msg.internal_date)
-                        .await
-                    {
-                        Ok(()) => {
+                    let append_result = tokio::time::timeout(
+                        opts.timeout,
+                        dst.append_message(folder, &msg.body, &msg.flags, msg.internal_date),
+                    )
+                    .await
+                    .map_err(|_| Error::Network(format!("append timeout for uid {uid}")));
+                    match append_result {
+                        Ok(Ok(())) => {
                             stats.copied += 1;
                             stats.bytes += msg.body.len() as u64;
                             if let Some(m) = msg.message_id.or(probe_id) {
                                 dst_ids.insert(m);
                             }
                         }
-                        Err(e) => {
+                        Ok(Err(e)) | Err(e) => {
                             stats.failed += 1;
                             tracing::warn!(folder = folder, uid, error = %e, "append failed");
                         }
@@ -142,11 +154,11 @@ pub async fn sync_folder(
                     stats.bytes += msg.body.len() as u64;
                 }
             }
-            Ok(None) => {
+            Ok(Ok(None)) => {
                 stats.failed += 1;
                 tracing::warn!(folder = folder, uid, "fetch returned no message");
             }
-            Err(e) => {
+            Ok(Err(e)) | Err(e) => {
                 stats.failed += 1;
                 tracing::warn!(folder = folder, uid, error = %e, "fetch failed");
             }
@@ -248,6 +260,8 @@ pub async fn run_migration(settings: &Settings, reporter: &Reporter) -> Result<M
     let opts = SyncOptions {
         max_message_size: settings.max_message_size,
         dry_run: settings.dry_run,
+        timeout: Duration::from_secs(settings.timeout_secs),
+        retries: settings.retries,
     };
 
     tracing::info!(folders = folders.len(), "starting migration");

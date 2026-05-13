@@ -5,4 +5,5 @@ pub mod error;
 pub mod imap_client;
 pub mod oauth;
 pub mod progress;
+pub mod retry;
 pub mod sync;
