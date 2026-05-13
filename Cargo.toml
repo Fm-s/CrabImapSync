@@ -1,6 +1,51 @@
 [package]
 name = "crab-imap-sync"
 version = "0.1.0"
-edition = "2024"
+edition = "2021"
+description = "Memory-bounded streaming IMAP-to-IMAP migration CLI"
+license = "MIT"
+repository = "https://github.com/felipemsouza/crab-imap-sync"
+readme = "README.md"
+keywords = ["imap", "email", "migration", "sync"]
+categories = ["command-line-utilities", "email"]
+
+[[bin]]
+name = "crab-imap-sync"
+path = "src/main.rs"
 
 [dependencies]
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "io-util", "time", "fs"] }
+async-imap = "0.10"
+tokio-rustls = "0.26"
+rustls-pemfile = "2"
+webpki-roots = "0.26"
+futures = "0.3"
+
+clap = { version = "4", features = ["derive", "env"] }
+
+oauth2 = "5"
+tiny_http = "0.12"
+webbrowser = "1"
+keyring = "3"
+url = "2"
+base64 = "0.22"
+
+indicatif = "0.17"
+
+thiserror = "1"
+anyhow = "1"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+mail-parser = "0.9"
+globset = "0.4"
+chrono = { version = "0.4", default-features = false, features = ["std"] }
+
+[dev-dependencies]
+testcontainers = "0.23"
+tempfile = "3"
+
+[profile.release]
+lto = true
+codegen-units = 1
+strip = true
