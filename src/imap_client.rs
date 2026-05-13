@@ -288,16 +288,32 @@ pub fn parse_message_id(header_bytes: &[u8]) -> Option<String> {
     None
 }
 
-/// XOAUTH2 stub — full implementation in Phase 7.
 async fn authenticate_xoauth2(
-    _client: async_imap::Client<TlsStream<TcpStream>>,
+    client: async_imap::Client<TlsStream<TcpStream>>,
     user: &str,
-    _access_token: &str,
+    access_token: &str,
 ) -> Result<Session<TlsStream<TcpStream>>> {
-    Err(Error::Auth {
-        user: user.to_string(),
-        reason: "XOAUTH2 not yet implemented".into(),
-    })
+    use base64::Engine as _;
+    let raw = format!("user={user}\x01auth=Bearer {access_token}\x01\x01");
+    let encoded = base64::engine::general_purpose::STANDARD.encode(raw);
+    client
+        .authenticate("XOAUTH2", Xoauth2Auth { token: encoded })
+        .await
+        .map_err(|(e, _)| Error::Auth {
+            user: user.to_string(),
+            reason: e.to_string(),
+        })
+}
+
+struct Xoauth2Auth {
+    token: String,
+}
+
+impl async_imap::Authenticator for Xoauth2Auth {
+    type Response = String;
+    fn process(&mut self, _challenge: &[u8]) -> Self::Response {
+        std::mem::take(&mut self.token)
+    }
 }
 
 #[cfg(test)]
