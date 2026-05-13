@@ -1,0 +1,102 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Tag name (e.g. v0.1.0)"
+        required: true
+
+permissions:
+  contents: write
+
+jobs:
+  build-macos:
+    strategy:
+      matrix:
+        include:
+          - target: aarch64-apple-darwin
+            os: macos-latest
+            name: macos-arm64
+          - target: x86_64-apple-darwin
+            os: macos-13
+            name: macos-x86_64
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+      - uses: Swatinem/rust-cache@v2
+      - name: Build
+        run: cargo build --release --target ${{ matrix.target }}
+      - name: Package
+        run: |
+          mkdir -p dist
+          BIN="target/${{ matrix.target }}/release/crab-imap-sync"
+          NAME="crab-imap-sync-${{ matrix.name }}"
+          tar -czf "dist/${NAME}.tar.gz" -C "$(dirname "$BIN")" "$(basename "$BIN")"
+          shasum -a 256 "dist/${NAME}.tar.gz" > "dist/${NAME}.tar.gz.sha256"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.name }}
+          path: dist/*
+
+  release:
+    needs: build-macos
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+      - name: Generate changelog
+        id: changelog
+        run: |
+          TAG="${GITHUB_REF_NAME:-${{ github.event.inputs.tag }}}"
+          PREV=$(git describe --tags --abbrev=0 "${TAG}^" 2>/dev/null || echo "")
+          {
+            echo "## ${TAG}"
+            echo
+            if [ -n "$PREV" ]; then
+              echo "**Changes since ${PREV}:**"
+              echo
+              git log --pretty=format:"- %s" "${PREV}..${TAG}"
+            else
+              echo "**Initial release.** All commits:"
+              echo
+              git log --pretty=format:"- %s" "${TAG}"
+            fi
+            echo
+            echo
+            echo "## SHA-256 checksums"
+            echo
+            echo '```'
+            cat dist/*.sha256
+            echo '```'
+            echo
+            echo "## Install"
+            echo
+            echo '```bash'
+            echo "# Apple Silicon"
+            echo "curl -L https://github.com/${GITHUB_REPOSITORY}/releases/download/${TAG}/crab-imap-sync-macos-arm64.tar.gz | tar xz"
+            echo
+            echo "# Intel macOS"
+            echo "curl -L https://github.com/${GITHUB_REPOSITORY}/releases/download/${TAG}/crab-imap-sync-macos-x86_64.tar.gz | tar xz"
+            echo '```'
+          } > CHANGELOG_RELEASE.md
+          echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
+      - uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.changelog.outputs.tag }}
+          name: ${{ steps.changelog.outputs.tag }}
+          body_path: CHANGELOG_RELEASE.md
+          files: |
+            dist/*.tar.gz
+            dist/*.sha256

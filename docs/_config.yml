@@ -1,0 +1,11 @@
+title: CrabImapSync
+description: Memory-bounded streaming IMAP-to-IMAP migration CLI written in Rust.
+theme: jekyll-theme-minimal
+markdown: kramdown
+plugins:
+  - jekyll-relative-links
+relative_links:
+  enabled: true
+  collections: true
+include:
+  - "*.md"
