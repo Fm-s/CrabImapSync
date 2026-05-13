@@ -75,6 +75,32 @@ pub async fn sync_folder(
     let started = std::time::Instant::now();
 
     for (idx, uid) in src_uids.iter().copied().enumerate() {
+        // 1. Cheap: fetch only Message-Id header to decide if we need the body.
+        let probe_id = match src.fetch_message_id_by_uid(uid).await {
+            Ok(id) => id,
+            Err(e) => {
+                stats.failed += 1;
+                tracing::warn!(folder = folder, uid, error = %e, "message-id probe failed");
+                bar.inc(1);
+                continue;
+            }
+        };
+
+        // 2. If destination already has this Message-Id, skip body fetch entirely.
+        if let Some(ref mid) = probe_id {
+            if dst_ids.contains(mid) {
+                stats.skipped += 1;
+                bar.inc(1);
+                // periodic progress logging still applies below
+                let done = (idx as u64) + 1;
+                if done == 1 || done == total || done.is_multiple_of(log_every) {
+                    log_progress(folder, done, total, &stats, started);
+                }
+                continue;
+            }
+        }
+
+        // 3. Not a duplicate (or no Message-Id at all): fetch the full body.
         match src.fetch_full_by_uid(uid).await {
             Ok(Some(msg)) => {
                 let too_big = opts
@@ -82,16 +108,6 @@ pub async fn sync_folder(
                     .map(|m| msg.body.len() as u64 > m)
                     .unwrap_or(false);
                 if too_big {
-                    stats.skipped += 1;
-                    bar.inc(1);
-                    continue;
-                }
-                let dup = msg
-                    .message_id
-                    .as_ref()
-                    .map(|m| dst_ids.contains(m))
-                    .unwrap_or(false);
-                if dup {
                     stats.skipped += 1;
                     bar.inc(1);
                     continue;
@@ -105,7 +121,7 @@ pub async fn sync_folder(
                         Ok(()) => {
                             stats.copied += 1;
                             stats.bytes += msg.body.len() as u64;
-                            if let Some(m) = msg.message_id {
+                            if let Some(m) = msg.message_id.or(probe_id) {
                                 dst_ids.insert(m);
                             }
                         }
@@ -132,29 +148,43 @@ pub async fn sync_folder(
 
         let done = (idx as u64) + 1;
         if done == 1 || done == total || done.is_multiple_of(log_every) {
-            let elapsed = started.elapsed().as_secs_f64();
-            let rate = if elapsed > 0.0 { done as f64 / elapsed } else { 0.0 };
-            let eta_secs = if rate > 0.0 {
-                ((total - done) as f64 / rate) as u64
-            } else {
-                0
-            };
-            let mb = stats.bytes as f64 / 1_048_576.0;
-            tracing::info!(
-                folder,
-                progress = format!("{done}/{total}"),
-                copied = stats.copied,
-                skipped = stats.skipped,
-                failed = stats.failed,
-                mb_copied = format!("{mb:.2}"),
-                rate = format!("{rate:.1} msg/s"),
-                eta_secs,
-                "progress"
-            );
+            log_progress(folder, done, total, &stats, started);
         }
     }
     bar.finish();
     Ok(stats)
+}
+
+fn log_progress(
+    folder: &str,
+    done: u64,
+    total: u64,
+    stats: &FolderStats,
+    started: std::time::Instant,
+) {
+    let elapsed = started.elapsed().as_secs_f64();
+    let rate = if elapsed > 0.0 {
+        done as f64 / elapsed
+    } else {
+        0.0
+    };
+    let eta_secs = if rate > 0.0 {
+        ((total - done) as f64 / rate) as u64
+    } else {
+        0
+    };
+    let mb = stats.bytes as f64 / 1_048_576.0;
+    tracing::info!(
+        folder,
+        progress = format!("{done}/{total}"),
+        copied = stats.copied,
+        skipped = stats.skipped,
+        failed = stats.failed,
+        mb_copied = format!("{mb:.2}"),
+        rate = format!("{rate:.1} msg/s"),
+        eta_secs,
+        "progress"
+    );
 }
 
 #[derive(Debug, Default)]

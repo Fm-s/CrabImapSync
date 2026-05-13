@@ -208,6 +208,21 @@ impl Client {
         Ok(ids)
     }
 
+    /// Lightweight: fetch only the Message-Id header for one UID.
+    /// Used for dedup checks before deciding whether to download the body.
+    pub async fn fetch_message_id_by_uid(&mut self, uid: u32) -> Result<Option<String>> {
+        use futures::TryStreamExt;
+        let seq = format!("{uid}");
+        let mut stream = self
+            .session
+            .uid_fetch(seq, "BODY.PEEK[HEADER]")
+            .await?;
+        if let Some(msg) = stream.try_next().await? {
+            return Ok(msg.header().and_then(parse_message_id));
+        }
+        Ok(None)
+    }
+
     pub async fn fetch_full_by_uid(&mut self, uid: u32) -> Result<Option<FetchedMessage>> {
         use futures::TryStreamExt;
         let seq = format!("{uid}");
