@@ -303,7 +303,9 @@ impl Client {
     pub async fn fetch_full_by_uid(&mut self, uid: u32) -> Result<Option<FetchedMessage>> {
         use futures::TryStreamExt;
         let seq = format!("{uid}");
-        let query = "(BODY.PEEK[] INTERNALDATE FLAGS BODY.PEEK[HEADER])";
+        // BODY.PEEK[] already contains all headers — no need for a redundant
+        // BODY.PEEK[HEADER] section which some servers handle poorly.
+        let query = "(BODY.PEEK[] INTERNALDATE FLAGS)";
         let messages: Vec<_> = self
             .session
             .uid_fetch(seq, query)
@@ -314,7 +316,9 @@ impl Client {
             let body = msg.body().map(|b| b.to_vec()).unwrap_or_default();
             let internal_date = msg.internal_date();
             let flags: Vec<String> = msg.flags().filter_map(flag_to_imap_string).collect();
-            let message_id = msg.header().and_then(parse_message_id);
+            // BODY[] returned by the server starts with all headers, so we can
+            // parse the Message-Id from the body bytes directly.
+            let message_id = parse_message_id(&body);
             return Ok(Some(FetchedMessage {
                 body,
                 internal_date,
@@ -337,7 +341,9 @@ impl Client {
         } else {
             Some(format!("({})", flags.join(" ")))
         };
-        let date_str = internal_date.map(|dt| dt.format("%d-%b-%Y %H:%M:%S %z").to_string());
+        // RFC 3501 §6.3.11 requires INTERNALDATE wrapped in DQUOTE.
+        let date_str =
+            internal_date.map(|dt| format!("\"{}\"", dt.format("%d-%b-%Y %H:%M:%S %z")));
         self.session
             .append(folder, flag_str.as_deref(), date_str.as_deref(), body)
             .await?;
