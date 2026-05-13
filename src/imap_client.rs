@@ -145,6 +145,7 @@ pub struct FetchedMessage {
 
 impl Client {
     pub async fn list_folders(&mut self) -> Result<Vec<String>> {
+        use async_imap::types::NameAttribute;
         use futures::TryStreamExt;
         let names = self
             .session
@@ -153,6 +154,11 @@ impl Client {
             .try_collect::<Vec<_>>()
             .await?
             .into_iter()
+            .filter(|n| {
+                !n.attributes()
+                    .iter()
+                    .any(|a| matches!(a, NameAttribute::NoSelect))
+            })
             .map(|n| n.name().to_string())
             .collect();
         Ok(names)
@@ -230,7 +236,12 @@ impl Client {
         use futures::TryStreamExt;
         let seq = format!("{uid}");
         let query = "(BODY.PEEK[] INTERNALDATE FLAGS BODY.PEEK[HEADER])";
-        let messages: Vec<_> = self.session.uid_fetch(seq, query).await?.try_collect().await?;
+        let messages: Vec<_> = self
+            .session
+            .uid_fetch(seq, query)
+            .await?
+            .try_collect()
+            .await?;
         if let Some(msg) = messages.first() {
             let body = msg.body().map(|b| b.to_vec()).unwrap_or_default();
             let internal_date = msg.internal_date();
@@ -283,18 +294,42 @@ fn flag_to_imap_string(flag: async_imap::types::Flag<'_>) -> String {
 
 pub fn parse_message_id(header_bytes: &[u8]) -> Option<String> {
     let s = std::str::from_utf8(header_bytes).ok()?;
-    for line in s.lines() {
-        if let Some(rest) = line
-            .strip_prefix("Message-ID:")
-            .or_else(|| line.strip_prefix("Message-Id:"))
-            .or_else(|| line.strip_prefix("MESSAGE-ID:"))
-        {
-            return Some(
-                rest.trim()
-                    .trim_matches(|c| c == '<' || c == '>')
-                    .to_string(),
-            );
+
+    // Unfold per RFC 5322: continuation lines start with whitespace and belong
+    // to the previous header line.
+    let mut unfolded: Vec<String> = Vec::new();
+    for raw in s.split("\r\n") {
+        if raw.is_empty() {
+            continue;
         }
+        let is_continuation = raw.starts_with(' ') || raw.starts_with('\t');
+        if is_continuation {
+            if let Some(last) = unfolded.last_mut() {
+                last.push(' ');
+                last.push_str(raw.trim_start());
+                continue;
+            }
+        }
+        unfolded.push(raw.to_string());
+    }
+
+    const KEY: &str = "message-id:";
+    for line in &unfolded {
+        let trimmed = line.trim_start();
+        if trimmed.len() < KEY.len() {
+            continue;
+        }
+        if !trimmed[..KEY.len()].eq_ignore_ascii_case(KEY) {
+            continue;
+        }
+        let value = trimmed[KEY.len()..]
+            .trim()
+            .trim_matches(|c| c == '<' || c == '>')
+            .trim();
+        if value.is_empty() {
+            continue;
+        }
+        return Some(value.to_string());
     }
     None
 }
@@ -341,5 +376,30 @@ mod tests {
     fn missing_message_id_returns_none() {
         let h = b"From: x@y\r\n";
         assert!(parse_message_id(h).is_none());
+    }
+
+    #[test]
+    fn handles_folded_message_id() {
+        let h = b"Message-ID:\r\n <folded@host>\r\n";
+        assert_eq!(parse_message_id(h).as_deref(), Some("folded@host"));
+    }
+
+    #[test]
+    fn rejects_empty_message_id() {
+        assert!(parse_message_id(b"Message-ID: <>\r\n").is_none());
+        assert!(parse_message_id(b"Message-ID:\r\n").is_none());
+        assert!(parse_message_id(b"Message-ID:   \r\n").is_none());
+    }
+
+    #[test]
+    fn case_insensitive_header_name() {
+        assert_eq!(
+            parse_message_id(b"message-id: <a@b>\r\n").as_deref(),
+            Some("a@b")
+        );
+        assert_eq!(
+            parse_message_id(b"MESSAGE-ID: <a@b>\r\n").as_deref(),
+            Some("a@b")
+        );
     }
 }

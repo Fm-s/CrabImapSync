@@ -59,15 +59,22 @@ pub async fn sync_folder(
     tracing::info!(folder, "creating destination folder if missing");
     dst.create_folder_if_missing(folder).await?;
 
-    tracing::info!(folder, "indexing destination message-ids (this may take a while for large folders)");
+    tracing::info!(
+        folder,
+        "indexing destination message-ids (this may take a while for large folders)"
+    );
     dst.select_for_write(folder).await?;
-    let mut dst_ids = dst.fetch_all_message_ids().await.unwrap_or_default();
+    let mut dst_ids = dst.fetch_all_message_ids().await?;
     tracing::info!(folder, dst_count = dst_ids.len(), "destination indexed");
 
     tracing::info!(folder, "listing source UIDs");
     src.examine(folder).await?;
     let src_uids = src.search_all_uids().await?;
-    tracing::info!(folder, src_count = src_uids.len(), "starting message transfer");
+    tracing::info!(
+        folder,
+        src_count = src_uids.len(),
+        "starting message transfer"
+    );
 
     let total = src_uids.len() as u64;
     let bar = reporter.new_folder_bar(folder, total);
@@ -247,15 +254,26 @@ pub async fn run_migration(settings: &Settings, reporter: &Reporter) -> Result<M
     let mut report = MigrationReport::default();
     for (i, f) in folders.iter().enumerate() {
         tracing::info!(folder = %f, idx = i + 1, total = folders.len(), "==> entering folder");
-        let stats = sync_folder(f, &mut src, &mut dst, reporter, &opts).await?;
-        tracing::info!(
-            folder = %f,
-            copied = stats.copied,
-            skipped = stats.skipped,
-            failed = stats.failed,
-            "folder done"
-        );
-        report.folders.push(stats);
+        match sync_folder(f, &mut src, &mut dst, reporter, &opts).await {
+            Ok(stats) => {
+                tracing::info!(
+                    folder = %f,
+                    copied = stats.copied,
+                    skipped = stats.skipped,
+                    failed = stats.failed,
+                    "folder done"
+                );
+                report.folders.push(stats);
+            }
+            Err(e) => {
+                tracing::error!(folder = %f, error = %e, "folder failed; continuing to next folder");
+                report.folders.push(FolderStats {
+                    folder: f.clone(),
+                    failed: 1,
+                    ..Default::default()
+                });
+            }
+        }
     }
 
     src.logout().await?;
