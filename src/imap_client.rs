@@ -393,10 +393,13 @@ pub fn parse_message_id(header_bytes: &[u8]) -> Option<String> {
     const KEY: &str = "message-id:";
     for line in &unfolded {
         let trimmed = line.trim_start();
-        if trimmed.len() < KEY.len() {
-            continue;
-        }
-        if !trimmed[..KEY.len()].eq_ignore_ascii_case(KEY) {
+        // Use .get() to safely handle multi-byte UTF-8: returns None if the
+        // requested range falls inside a char boundary or runs past the end.
+        let head = match trimmed.get(..KEY.len()) {
+            Some(s) => s,
+            None => continue,
+        };
+        if !head.eq_ignore_ascii_case(KEY) {
             continue;
         }
         let value = trimmed[KEY.len()..]
