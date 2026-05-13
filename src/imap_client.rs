@@ -258,24 +258,39 @@ impl Client {
         Ok(ids)
     }
 
-    /// Lightweight: fetch only the Message-Id header for one UID.
-    /// Used for dedup checks before deciding whether to download the body.
-    /// IMPORTANT: fully drain the stream to keep IMAP session state coherent.
-    /// Uses BODY.PEEK[HEADER.FIELDS (MESSAGE-ID)] to minimise bandwidth — imap-proto
-    /// maps both HEADER and HEADER.FIELDS to the same SectionPath so msg.header() works.
-    pub async fn fetch_message_id_by_uid(&mut self, uid: u32) -> Result<Option<String>> {
+    /// Batch-fetch Message-Id headers for the given UIDs.
+    /// Returns a map UID → Message-Id. UIDs whose response lacked a parseable
+    /// Message-Id header are absent from the map.
+    pub async fn fetch_message_ids_for_uids(
+        &mut self,
+        uids: &[u32],
+    ) -> Result<std::collections::HashMap<u32, String>> {
         use futures::TryStreamExt;
-        let seq = format!("{uid}");
+        let mut out = std::collections::HashMap::with_capacity(uids.len());
+        if uids.is_empty() {
+            return Ok(out);
+        }
+        // Build a comma-separated UID set for the IMAP UID FETCH command.
+        let seq = uids
+            .iter()
+            .map(|u| u.to_string())
+            .collect::<Vec<_>>()
+            .join(",");
         let messages: Vec<_> = self
             .session
             .uid_fetch(seq, "BODY.PEEK[HEADER.FIELDS (MESSAGE-ID)]")
             .await?
             .try_collect()
             .await?;
-        Ok(messages
-            .first()
-            .and_then(|m| m.header())
-            .and_then(parse_message_id))
+        for msg in messages {
+            let uid = msg.uid;
+            if let (Some(uid), Some(hdr)) = (uid, msg.header()) {
+                if let Some(mid) = parse_message_id(hdr) {
+                    out.insert(uid, mid);
+                }
+            }
+        }
+        Ok(out)
     }
 
     pub async fn fetch_full_by_uid(&mut self, uid: u32) -> Result<Option<FetchedMessage>> {

@@ -80,38 +80,80 @@ pub async fn sync_folder(
         "starting message transfer"
     );
 
-    let total = src_uids.len() as u64;
-    let bar = reporter.new_folder_bar(folder, total);
-    let log_every: u64 = (total / 40).clamp(20, 500);
-    let started = std::time::Instant::now();
+    const BATCH_SIZE: usize = 500;
 
-    for (idx, uid) in src_uids.iter().copied().enumerate() {
-        // 1. Cheap: fetch only Message-Id header to decide if we need the body.
-        let probe_id = match fetch_probe_with_reconnect(src, uid, opts.timeout).await {
-            Ok(id) => id,
-            Err(e) => {
-                stats.failed += 1;
-                tracing::warn!(folder = folder, uid, error = %e, "message-id probe failed");
-                bar.inc(1);
-                continue;
-            }
-        };
-
-        // 2. If destination already has this Message-Id, skip body fetch entirely.
-        if let Some(ref mid) = probe_id {
-            if dst_ids.contains(mid) {
-                stats.skipped += 1;
-                bar.inc(1);
-                // periodic progress logging still applies below
-                let done = (idx as u64) + 1;
-                if done == 1 || done == total || done.is_multiple_of(log_every) {
-                    log_progress(folder, done, total, &stats, started);
+    tracing::info!(
+        folder,
+        total = src_uids.len(),
+        batch_size = BATCH_SIZE,
+        "batch-fetching source Message-Ids"
+    );
+    let mut src_mids: std::collections::HashMap<u32, String> =
+        std::collections::HashMap::with_capacity(src_uids.len());
+    for chunk in src_uids.chunks(BATCH_SIZE) {
+        let chunk_map =
+            match tokio::time::timeout(opts.timeout, src.fetch_message_ids_for_uids(chunk)).await {
+                Ok(Ok(m)) => m,
+                Ok(Err(e)) => {
+                    tracing::warn!(error = %e, "batch probe failed, attempting reconnect");
+                    src.reconnect().await?;
+                    tokio::time::timeout(opts.timeout, src.fetch_message_ids_for_uids(chunk))
+                        .await
+                        .map_err(|_| {
+                            Error::Network("batch probe timeout after reconnect".into())
+                        })??
                 }
-                continue;
+                Err(_) => {
+                    tracing::warn!("batch probe timeout, attempting reconnect");
+                    src.reconnect().await?;
+                    tokio::time::timeout(opts.timeout, src.fetch_message_ids_for_uids(chunk))
+                        .await
+                        .map_err(|_| {
+                            Error::Network("batch probe timeout after reconnect".into())
+                        })??
+                }
+            };
+        src_mids.extend(chunk_map);
+        tracing::info!(
+            folder,
+            mapped = src_mids.len(),
+            total = src_uids.len(),
+            "probe progress"
+        );
+    }
+    tracing::info!(folder, "probe complete; computing missing UIDs");
+
+    let mut to_copy: Vec<u32> = Vec::new();
+    let mut already_skipped: u64 = 0;
+    let mut without_mid: u64 = 0;
+    for &uid in &src_uids {
+        match src_mids.get(&uid) {
+            Some(mid) if dst_ids.contains(mid) => {
+                already_skipped += 1;
+            }
+            Some(_) => to_copy.push(uid),
+            None => {
+                // No Message-Id parsed — fetch full and append, can't dedup safely.
+                without_mid += 1;
+                to_copy.push(uid);
             }
         }
+    }
+    stats.skipped += already_skipped;
+    tracing::info!(
+        folder,
+        to_copy = to_copy.len(),
+        already_skipped,
+        without_mid,
+        "computed transfer plan"
+    );
 
-        // 3. Not a duplicate (or no Message-Id at all): fetch the full body.
+    let total_to_copy = to_copy.len() as u64;
+    let bar = reporter.new_folder_bar(folder, total_to_copy);
+    let log_every: u64 = (total_to_copy / 40).clamp(20, 500);
+    let started = std::time::Instant::now();
+
+    for (idx, uid) in to_copy.iter().copied().enumerate() {
         match fetch_full_with_reconnect(src, uid, opts.timeout).await {
             Ok(Some(msg)) => {
                 let too_big = opts
@@ -123,7 +165,6 @@ pub async fn sync_folder(
                     bar.inc(1);
                     continue;
                 }
-
                 if !opts.dry_run {
                     match append_with_reconnect(
                         dst,
@@ -138,7 +179,8 @@ pub async fn sync_folder(
                         Ok(()) => {
                             stats.copied += 1;
                             stats.bytes += msg.body.len() as u64;
-                            if let Some(m) = msg.message_id.or(probe_id) {
+                            if let Some(m) = msg.message_id.or_else(|| src_mids.get(&uid).cloned())
+                            {
                                 dst_ids.insert(m);
                             }
                         }
@@ -148,7 +190,6 @@ pub async fn sync_folder(
                         }
                     }
                 } else {
-                    // dry-run: count what would be copied without modifying dest
                     stats.would_copy += 1;
                     stats.bytes += msg.body.len() as u64;
                 }
@@ -163,38 +204,13 @@ pub async fn sync_folder(
             }
         }
         bar.inc(1);
-
         let done = (idx as u64) + 1;
-        if done == 1 || done == total || done.is_multiple_of(log_every) {
-            log_progress(folder, done, total, &stats, started);
+        if done == 1 || done == total_to_copy || done.is_multiple_of(log_every.max(1)) {
+            log_progress(folder, done, total_to_copy, &stats, started);
         }
     }
     bar.finish();
     Ok(stats)
-}
-
-/// Fetch the Message-ID header for `uid`, retrying once after a reconnect on
-/// the first error.  Timeout is applied to each individual attempt.
-async fn fetch_probe_with_reconnect(
-    src: &mut Client,
-    uid: u32,
-    timeout: Duration,
-) -> Result<Option<String>> {
-    match tokio::time::timeout(timeout, src.fetch_message_id_by_uid(uid))
-        .await
-        .map_err(|_| Error::Network(format!("probe timeout for uid {uid}")))?
-    {
-        Ok(v) => Ok(v),
-        Err(e) => {
-            tracing::warn!(uid, error = %e, "probe failed; attempting reconnect");
-            src.reconnect().await?;
-            tokio::time::timeout(timeout, src.fetch_message_id_by_uid(uid))
-                .await
-                .map_err(|_| {
-                    Error::Network(format!("probe timeout (after reconnect) for uid {uid}"))
-                })?
-        }
-    }
 }
 
 /// Fetch the full message body for `uid`, retrying once after a reconnect on
