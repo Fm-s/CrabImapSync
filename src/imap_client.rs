@@ -342,8 +342,7 @@ impl Client {
             Some(format!("({})", flags.join(" ")))
         };
         // RFC 3501 §6.3.11 requires INTERNALDATE wrapped in DQUOTE.
-        let date_str =
-            internal_date.map(|dt| format!("\"{}\"", dt.format("%d-%b-%Y %H:%M:%S %z")));
+        let date_str = internal_date.map(|dt| format!("\"{}\"", dt.format("%d-%b-%Y %H:%M:%S %z")));
         self.session
             .append(folder, flag_str.as_deref(), date_str.as_deref(), body)
             .await?;
