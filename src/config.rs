@@ -121,6 +121,12 @@ struct EndpointInputs {
 impl EndpointInputs {
     fn build(self) -> Result<EndpointSettings> {
         let side = self.side;
+        if self.host.is_empty() {
+            return Err(Error::Config(format!("--{side}-host cannot be empty")));
+        }
+        if self.user.is_empty() {
+            return Err(Error::Config(format!("--{side}-user cannot be empty")));
+        }
         let auth = match self.auth_kind {
             AuthKind::Login => {
                 let envvar = self.pass_env.ok_or_else(|| {

@@ -157,12 +157,19 @@ impl tokio_rustls::rustls::client::danger::ServerCertVerifier for NoVerifier {
     }
 
     fn supported_verify_schemes(&self) -> Vec<tokio_rustls::rustls::SignatureScheme> {
+        use tokio_rustls::rustls::SignatureScheme as S;
         vec![
-            tokio_rustls::rustls::SignatureScheme::RSA_PKCS1_SHA256,
-            tokio_rustls::rustls::SignatureScheme::RSA_PKCS1_SHA384,
-            tokio_rustls::rustls::SignatureScheme::RSA_PKCS1_SHA512,
-            tokio_rustls::rustls::SignatureScheme::ECDSA_NISTP256_SHA256,
-            tokio_rustls::rustls::SignatureScheme::ECDSA_NISTP384_SHA384,
+            S::RSA_PKCS1_SHA256,
+            S::RSA_PKCS1_SHA384,
+            S::RSA_PKCS1_SHA512,
+            S::RSA_PSS_SHA256,
+            S::RSA_PSS_SHA384,
+            S::RSA_PSS_SHA512,
+            S::ECDSA_NISTP256_SHA256,
+            S::ECDSA_NISTP384_SHA384,
+            S::ECDSA_NISTP521_SHA512,
+            S::ED25519,
+            S::ED448,
         ]
     }
 }
@@ -284,7 +291,7 @@ impl Client {
         if let Some(msg) = messages.first() {
             let body = msg.body().map(|b| b.to_vec()).unwrap_or_default();
             let internal_date = msg.internal_date();
-            let flags: Vec<String> = msg.flags().map(flag_to_imap_string).collect();
+            let flags: Vec<String> = msg.flags().filter_map(flag_to_imap_string).collect();
             let message_id = msg.header().and_then(parse_message_id);
             return Ok(Some(FetchedMessage {
                 body,
@@ -317,17 +324,20 @@ impl Client {
 }
 
 /// Convert an async-imap [`Flag`] to its IMAP wire string (e.g. `\Seen`).
-fn flag_to_imap_string(flag: async_imap::types::Flag<'_>) -> String {
+///
+/// Returns `None` for flags that are not valid to include in an APPEND command:
+/// - `\Recent` is server-assigned and MUST NOT be set by a client.
+/// - `\*` (MayCreate) is a special indicator, not an appendable flag.
+fn flag_to_imap_string(flag: async_imap::types::Flag<'_>) -> Option<String> {
     use async_imap::types::Flag;
     match flag {
-        Flag::Seen => r"\Seen".to_string(),
-        Flag::Answered => r"\Answered".to_string(),
-        Flag::Flagged => r"\Flagged".to_string(),
-        Flag::Deleted => r"\Deleted".to_string(),
-        Flag::Draft => r"\Draft".to_string(),
-        Flag::Recent => r"\Recent".to_string(),
-        Flag::MayCreate => r"\*".to_string(),
-        Flag::Custom(s) => s.into_owned(),
+        Flag::Seen => Some(r"\Seen".to_string()),
+        Flag::Answered => Some(r"\Answered".to_string()),
+        Flag::Flagged => Some(r"\Flagged".to_string()),
+        Flag::Deleted => Some(r"\Deleted".to_string()),
+        Flag::Draft => Some(r"\Draft".to_string()),
+        Flag::Recent | Flag::MayCreate => None,
+        Flag::Custom(s) => Some(s.into_owned()),
     }
 }
 

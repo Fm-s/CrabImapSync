@@ -37,6 +37,7 @@ pub struct FolderStats {
     pub copied: u64,
     pub skipped: u64,
     pub failed: u64,
+    pub would_copy: u64,
     pub bytes: u64,
 }
 
@@ -147,7 +148,8 @@ pub async fn sync_folder(
                         }
                     }
                 } else {
-                    stats.copied += 1;
+                    // dry-run: count what would be copied without modifying dest
+                    stats.would_copy += 1;
                     stats.bytes += msg.body.len() as u64;
                 }
             }
@@ -300,6 +302,9 @@ impl MigrationReport {
     }
     pub fn total_failed(&self) -> u64 {
         self.folders.iter().map(|f| f.failed).sum()
+    }
+    pub fn total_would_copy(&self) -> u64 {
+        self.folders.iter().map(|f| f.would_copy).sum()
     }
     pub fn total_bytes(&self) -> u64 {
         self.folders.iter().map(|f| f.bytes).sum()
