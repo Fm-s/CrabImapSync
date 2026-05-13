@@ -56,13 +56,18 @@ pub async fn sync_folder(
         ..Default::default()
     };
 
+    tracing::info!(folder, "creating destination folder if missing");
     dst.create_folder_if_missing(folder).await?;
 
+    tracing::info!(folder, "indexing destination message-ids (this may take a while for large folders)");
     dst.select_for_write(folder).await?;
     let mut dst_ids = dst.fetch_all_message_ids().await.unwrap_or_default();
+    tracing::info!(folder, dst_count = dst_ids.len(), "destination indexed");
 
+    tracing::info!(folder, "listing source UIDs");
     src.examine(folder).await?;
     let src_uids = src.search_all_uids().await?;
+    tracing::info!(folder, src_count = src_uids.len(), "starting message transfer");
 
     let bar = reporter.new_folder_bar(folder, src_uids.len() as u64);
 
@@ -182,9 +187,11 @@ pub async fn run_migration(settings: &Settings, reporter: &Reporter) -> Result<M
         dry_run: settings.dry_run,
     };
 
+    tracing::info!(folders = folders.len(), "starting migration");
     let mut report = MigrationReport::default();
-    for f in folders {
-        let stats = sync_folder(&f, &mut src, &mut dst, reporter, &opts).await?;
+    for (i, f) in folders.iter().enumerate() {
+        tracing::info!(folder = %f, idx = i + 1, total = folders.len(), "==> entering folder");
+        let stats = sync_folder(f, &mut src, &mut dst, reporter, &opts).await?;
         tracing::info!(
             folder = %f,
             copied = stats.copied,
