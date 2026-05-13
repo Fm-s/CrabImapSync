@@ -212,6 +212,13 @@ impl Client {
         Ok(())
     }
 
+    /// CLOSE the currently selected mailbox, returning to AUTHENTICATED state.
+    /// Useful before APPEND to avoid async EXISTS responses interleaving.
+    pub async fn close_mailbox(&mut self) -> Result<()> {
+        self.session.close().await?;
+        Ok(())
+    }
+
     pub async fn examine(&mut self, folder: &str) -> Result<()> {
         self.session.examine(folder).await?;
         Ok(())

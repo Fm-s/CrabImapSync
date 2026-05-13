@@ -71,6 +71,12 @@ pub async fn sync_folder(
     let mut dst_ids = dst.fetch_all_message_ids().await?;
     tracing::info!(folder, dst_count = dst_ids.len(), "destination indexed");
 
+    // Close the dst mailbox so APPENDs run in AUTHENTICATED state, avoiding
+    // async EXISTS responses interleaving with our protocol turns.
+    if let Err(e) = dst.close_mailbox().await {
+        tracing::warn!(folder, error = %e, "close mailbox after indexing failed (continuing)");
+    }
+
     tracing::info!(folder, "listing source UIDs");
     src.examine(folder).await?;
     let src_uids = src.search_all_uids().await?;
@@ -215,31 +221,33 @@ pub async fn sync_folder(
 }
 
 /// Fetch the full message body for `uid`, retrying once after a reconnect on
-/// the first error.
+/// the first error (including timeout).
 async fn fetch_full_with_reconnect(
     src: &mut Client,
     uid: u32,
     timeout: Duration,
 ) -> Result<Option<crate::imap_client::FetchedMessage>> {
-    match tokio::time::timeout(timeout, src.fetch_full_by_uid(uid))
-        .await
-        .map_err(|_| Error::Network(format!("fetch timeout for uid {uid}")))?
-    {
-        Ok(v) => Ok(v),
-        Err(e) => {
-            tracing::warn!(uid, error = %e, "fetch failed; attempting reconnect");
-            src.reconnect().await?;
-            tokio::time::timeout(timeout, src.fetch_full_by_uid(uid))
-                .await
-                .map_err(|_| {
-                    Error::Network(format!("fetch timeout (after reconnect) for uid {uid}"))
-                })?
-        }
+    let first = tokio::time::timeout(timeout, src.fetch_full_by_uid(uid)).await;
+    let first_err = match first {
+        Ok(Ok(v)) => return Ok(v),
+        Ok(Err(e)) => format!("imap error: {e}"),
+        Err(_) => format!("timeout after {}s", timeout.as_secs()),
+    };
+    tracing::warn!(uid, %first_err, "fetch failed; attempting reconnect");
+    src.reconnect().await?;
+    match tokio::time::timeout(timeout, src.fetch_full_by_uid(uid)).await {
+        Ok(Ok(v)) => Ok(v),
+        Ok(Err(e)) => Err(Error::Network(format!(
+            "fetch (after reconnect) for uid {uid}: {e}"
+        ))),
+        Err(_) => Err(Error::Network(format!(
+            "fetch timeout (after reconnect) for uid {uid}"
+        ))),
     }
 }
 
 /// Append a message to `folder` on `dst`, retrying once after a reconnect on
-/// the first error.
+/// the first error (including timeout).
 async fn append_with_reconnect(
     dst: &mut Client,
     folder: &str,
@@ -248,28 +256,31 @@ async fn append_with_reconnect(
     internal_date: Option<chrono::DateTime<chrono::FixedOffset>>,
     timeout: Duration,
 ) -> Result<()> {
+    let first = tokio::time::timeout(
+        timeout,
+        dst.append_message(folder, body, flags, internal_date),
+    )
+    .await;
+    let first_err = match first {
+        Ok(Ok(())) => return Ok(()),
+        Ok(Err(e)) => format!("imap error: {e}"),
+        Err(_) => format!("timeout after {}s", timeout.as_secs()),
+    };
+    tracing::warn!(folder, %first_err, "append failed; attempting reconnect");
+    dst.reconnect().await?;
     match tokio::time::timeout(
         timeout,
         dst.append_message(folder, body, flags, internal_date),
     )
     .await
-    .map_err(|_| Error::Network(format!("append timeout for folder {folder}")))?
     {
-        Ok(()) => Ok(()),
-        Err(e) => {
-            tracing::warn!(folder, error = %e, "append failed; attempting reconnect");
-            dst.reconnect().await?;
-            tokio::time::timeout(
-                timeout,
-                dst.append_message(folder, body, flags, internal_date),
-            )
-            .await
-            .map_err(|_| {
-                Error::Network(format!(
-                    "append timeout (after reconnect) for folder {folder}"
-                ))
-            })?
-        }
+        Ok(Ok(())) => Ok(()),
+        Ok(Err(e)) => Err(Error::Network(format!(
+            "append (after reconnect) for folder {folder}: {e}"
+        ))),
+        Err(_) => Err(Error::Network(format!(
+            "append timeout (after reconnect) for folder {folder}"
+        ))),
     }
 }
 
