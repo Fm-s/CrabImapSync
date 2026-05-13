@@ -11,6 +11,11 @@ use tokio_rustls::TlsConnector;
 
 pub struct Client {
     pub session: Session<TlsStream<TcpStream>>,
+    pub host: String,
+    pub port: u16,
+    pub tls: TlsMode,
+    pub insecure: bool,
+    pub auth: Auth,
 }
 
 pub struct ConnectParams<'a> {
@@ -62,7 +67,33 @@ impl Client {
                 authenticate_xoauth2(client, user, access_token).await?
             }
         };
-        Ok(Self { session })
+        Ok(Self {
+            session,
+            host: params.host.to_string(),
+            port: params.port,
+            tls: params.tls,
+            insecure: params.insecure,
+            auth: auth.clone(),
+        })
+    }
+
+    /// Re-establish the TCP+TLS connection and re-authenticate using the stored
+    /// credentials.  Replaces `self.session` in-place so all other stored fields
+    /// (host, port, …) are preserved.
+    pub async fn reconnect(&mut self) -> Result<()> {
+        tracing::warn!(host = %self.host, "reconnecting IMAP session");
+        let new = Self::connect_and_auth(
+            ConnectParams {
+                host: &self.host,
+                port: self.port,
+                tls: self.tls,
+                insecure: self.insecure,
+            },
+            &self.auth,
+        )
+        .await?;
+        self.session = new.session;
+        Ok(())
     }
 }
 

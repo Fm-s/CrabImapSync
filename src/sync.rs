@@ -86,12 +86,9 @@ pub async fn sync_folder(
 
     for (idx, uid) in src_uids.iter().copied().enumerate() {
         // 1. Cheap: fetch only Message-Id header to decide if we need the body.
-        let probe_result = tokio::time::timeout(opts.timeout, src.fetch_message_id_by_uid(uid))
-            .await
-            .map_err(|_| Error::Network(format!("probe timeout for uid {uid}")));
-        let probe_id = match probe_result {
-            Ok(Ok(id)) => id,
-            Ok(Err(e)) | Err(e) => {
+        let probe_id = match fetch_probe_with_reconnect(src, uid, opts.timeout).await {
+            Ok(id) => id,
+            Err(e) => {
                 stats.failed += 1;
                 tracing::warn!(folder = folder, uid, error = %e, "message-id probe failed");
                 bar.inc(1);
@@ -114,11 +111,8 @@ pub async fn sync_folder(
         }
 
         // 3. Not a duplicate (or no Message-Id at all): fetch the full body.
-        let fetch_result = tokio::time::timeout(opts.timeout, src.fetch_full_by_uid(uid))
-            .await
-            .map_err(|_| Error::Network(format!("fetch timeout for uid {uid}")));
-        match fetch_result {
-            Ok(Ok(Some(msg))) => {
+        match fetch_full_with_reconnect(src, uid, opts.timeout).await {
+            Ok(Some(msg)) => {
                 let too_big = opts
                     .max_message_size
                     .map(|m| msg.body.len() as u64 > m)
@@ -130,21 +124,24 @@ pub async fn sync_folder(
                 }
 
                 if !opts.dry_run {
-                    let append_result = tokio::time::timeout(
+                    match append_with_reconnect(
+                        dst,
+                        folder,
+                        &msg.body,
+                        &msg.flags,
+                        msg.internal_date,
                         opts.timeout,
-                        dst.append_message(folder, &msg.body, &msg.flags, msg.internal_date),
                     )
                     .await
-                    .map_err(|_| Error::Network(format!("append timeout for uid {uid}")));
-                    match append_result {
-                        Ok(Ok(())) => {
+                    {
+                        Ok(()) => {
                             stats.copied += 1;
                             stats.bytes += msg.body.len() as u64;
                             if let Some(m) = msg.message_id.or(probe_id) {
                                 dst_ids.insert(m);
                             }
                         }
-                        Ok(Err(e)) | Err(e) => {
+                        Err(e) => {
                             stats.failed += 1;
                             tracing::warn!(folder = folder, uid, error = %e, "append failed");
                         }
@@ -154,11 +151,11 @@ pub async fn sync_folder(
                     stats.bytes += msg.body.len() as u64;
                 }
             }
-            Ok(Ok(None)) => {
+            Ok(None) => {
                 stats.failed += 1;
                 tracing::warn!(folder = folder, uid, "fetch returned no message");
             }
-            Ok(Err(e)) | Err(e) => {
+            Err(e) => {
                 stats.failed += 1;
                 tracing::warn!(folder = folder, uid, error = %e, "fetch failed");
             }
@@ -172,6 +169,89 @@ pub async fn sync_folder(
     }
     bar.finish();
     Ok(stats)
+}
+
+/// Fetch the Message-ID header for `uid`, retrying once after a reconnect on
+/// the first error.  Timeout is applied to each individual attempt.
+async fn fetch_probe_with_reconnect(
+    src: &mut Client,
+    uid: u32,
+    timeout: Duration,
+) -> Result<Option<String>> {
+    match tokio::time::timeout(timeout, src.fetch_message_id_by_uid(uid))
+        .await
+        .map_err(|_| Error::Network(format!("probe timeout for uid {uid}")))?
+    {
+        Ok(v) => Ok(v),
+        Err(e) => {
+            tracing::warn!(uid, error = %e, "probe failed; attempting reconnect");
+            src.reconnect().await?;
+            tokio::time::timeout(timeout, src.fetch_message_id_by_uid(uid))
+                .await
+                .map_err(|_| {
+                    Error::Network(format!("probe timeout (after reconnect) for uid {uid}"))
+                })?
+        }
+    }
+}
+
+/// Fetch the full message body for `uid`, retrying once after a reconnect on
+/// the first error.
+async fn fetch_full_with_reconnect(
+    src: &mut Client,
+    uid: u32,
+    timeout: Duration,
+) -> Result<Option<crate::imap_client::FetchedMessage>> {
+    match tokio::time::timeout(timeout, src.fetch_full_by_uid(uid))
+        .await
+        .map_err(|_| Error::Network(format!("fetch timeout for uid {uid}")))?
+    {
+        Ok(v) => Ok(v),
+        Err(e) => {
+            tracing::warn!(uid, error = %e, "fetch failed; attempting reconnect");
+            src.reconnect().await?;
+            tokio::time::timeout(timeout, src.fetch_full_by_uid(uid))
+                .await
+                .map_err(|_| {
+                    Error::Network(format!("fetch timeout (after reconnect) for uid {uid}"))
+                })?
+        }
+    }
+}
+
+/// Append a message to `folder` on `dst`, retrying once after a reconnect on
+/// the first error.
+async fn append_with_reconnect(
+    dst: &mut Client,
+    folder: &str,
+    body: &[u8],
+    flags: &[String],
+    internal_date: Option<chrono::DateTime<chrono::FixedOffset>>,
+    timeout: Duration,
+) -> Result<()> {
+    match tokio::time::timeout(
+        timeout,
+        dst.append_message(folder, body, flags, internal_date),
+    )
+    .await
+    .map_err(|_| Error::Network(format!("append timeout for folder {folder}")))?
+    {
+        Ok(()) => Ok(()),
+        Err(e) => {
+            tracing::warn!(folder, error = %e, "append failed; attempting reconnect");
+            dst.reconnect().await?;
+            tokio::time::timeout(
+                timeout,
+                dst.append_message(folder, body, flags, internal_date),
+            )
+            .await
+            .map_err(|_| {
+                Error::Network(format!(
+                    "append timeout (after reconnect) for folder {folder}"
+                ))
+            })?
+        }
+    }
 }
 
 fn log_progress(
