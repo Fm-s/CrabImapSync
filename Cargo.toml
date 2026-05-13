@@ -19,7 +19,7 @@ path = "src/main.rs"
 
 [dependencies]
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "io-util", "time", "fs"] }
-async-imap = "0.10"
+async-imap = { version = "0.10", default-features = false, features = ["runtime-tokio"] }
 tokio-rustls = "0.26"
 rustls-pemfile = "2"
 webpki-roots = "0.26"
