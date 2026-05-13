@@ -69,9 +69,12 @@ pub async fn sync_folder(
     let src_uids = src.search_all_uids().await?;
     tracing::info!(folder, src_count = src_uids.len(), "starting message transfer");
 
-    let bar = reporter.new_folder_bar(folder, src_uids.len() as u64);
+    let total = src_uids.len() as u64;
+    let bar = reporter.new_folder_bar(folder, total);
+    let log_every: u64 = (total / 40).clamp(20, 500);
+    let started = std::time::Instant::now();
 
-    for uid in src_uids {
+    for (idx, uid) in src_uids.iter().copied().enumerate() {
         match src.fetch_full_by_uid(uid).await {
             Ok(Some(msg)) => {
                 let too_big = opts
@@ -126,6 +129,29 @@ pub async fn sync_folder(
             }
         }
         bar.inc(1);
+
+        let done = (idx as u64) + 1;
+        if done == 1 || done == total || done.is_multiple_of(log_every) {
+            let elapsed = started.elapsed().as_secs_f64();
+            let rate = if elapsed > 0.0 { done as f64 / elapsed } else { 0.0 };
+            let eta_secs = if rate > 0.0 {
+                ((total - done) as f64 / rate) as u64
+            } else {
+                0
+            };
+            let mb = stats.bytes as f64 / 1_048_576.0;
+            tracing::info!(
+                folder,
+                progress = format!("{done}/{total}"),
+                copied = stats.copied,
+                skipped = stats.skipped,
+                failed = stats.failed,
+                mb_copied = format!("{mb:.2}"),
+                rate = format!("{rate:.1} msg/s"),
+                eta_secs,
+                "progress"
+            );
+        }
     }
     bar.finish();
     Ok(stats)
