@@ -39,7 +39,7 @@ indicatif = "0.17"
 thiserror = "1"
 anyhow = "1"
 tracing = "0.1"
-tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+tracing-subscriber = { version = "0.3", features = ["env-filter", "tracing-log"] }
 
 mail-parser = "0.9"
 globset = "0.4"

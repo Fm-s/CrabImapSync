@@ -28,6 +28,8 @@ async fn real_main() -> i32 {
     } else {
         filter
     };
+    // With the `tracing-log` feature on tracing-subscriber, log::* calls
+    // (e.g. from async-imap) are automatically bridged to tracing.
     tracing_subscriber::fmt().with_env_filter(filter).init();
 
     let settings = match Settings::from_cli(cli) {
