@@ -1,4 +1,4 @@
-# CrabImapSync
+# CrabImapSync 🦀✉️
 
 Memory-bounded, streaming IMAP-to-IMAP migration CLI.
 
