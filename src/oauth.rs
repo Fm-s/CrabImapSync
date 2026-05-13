@@ -55,16 +55,16 @@ pub struct OAuthCreds {
     pub refresh_token: Option<String>,
 }
 
-pub struct OAuthRequest<'a> {
+pub struct OAuthRequest {
     pub provider: Provider,
-    pub user: &'a str,
-    pub client_id: &'a str,
-    pub client_secret: Option<&'a str>,
+    pub user: String,
+    pub client_id: String,
+    pub client_secret: Option<String>,
     pub use_keyring: bool,
 }
 
 /// Perform a PKCE browser flow (or refresh from keyring) and return OAuth2 credentials.
-pub fn obtain_token(req: OAuthRequest<'_>) -> Result<OAuthCreds> {
+pub fn obtain_token(req: OAuthRequest) -> Result<OAuthCreds> {
     use oauth2::basic::BasicClient;
     use oauth2::reqwest;
     use oauth2::{
@@ -86,12 +86,12 @@ pub fn obtain_token(req: OAuthRequest<'_>) -> Result<OAuthCreds> {
     let token_url = TokenUrl::new(req.provider.token_url().to_string())
         .map_err(|e| Error::OAuth(format!("invalid token URL: {e}")))?;
 
-    let mut oauth_client = BasicClient::new(ClientId::new(req.client_id.to_string()))
+    let mut oauth_client = BasicClient::new(ClientId::new(req.client_id))
         .set_auth_uri(auth_url)
         .set_token_uri(token_url);
 
     if let Some(secret) = req.client_secret {
-        oauth_client = oauth_client.set_client_secret(ClientSecret::new(secret.to_string()));
+        oauth_client = oauth_client.set_client_secret(ClientSecret::new(secret));
     }
 
     // Build the blocking HTTP client (redirects disabled to avoid SSRF)
@@ -102,7 +102,7 @@ pub fn obtain_token(req: OAuthRequest<'_>) -> Result<OAuthCreds> {
 
     // 2. Try keyring refresh token
     if req.use_keyring {
-        if let Ok(entry) = keyring::Entry::new(&service, req.user) {
+        if let Ok(entry) = keyring::Entry::new(&service, &req.user) {
             if let Ok(stored_rt) = entry.get_password() {
                 let refresh_token = RefreshToken::new(stored_rt);
                 match oauth_client
@@ -231,7 +231,7 @@ pub fn obtain_token(req: OAuthRequest<'_>) -> Result<OAuthCreds> {
     // 12. Persist refresh token in keyring
     if req.use_keyring {
         if let Some(ref rt) = refresh_token {
-            if let Ok(entry) = keyring::Entry::new(&service, req.user) {
+            if let Ok(entry) = keyring::Entry::new(&service, &req.user) {
                 let _ = entry.set_password(rt);
             }
         }

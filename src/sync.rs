@@ -307,8 +307,8 @@ impl MigrationReport {
 }
 
 pub async fn run_migration(settings: &Settings, reporter: &Reporter) -> Result<MigrationReport> {
-    let src_auth = resolve_auth(&settings.src)?;
-    let dst_auth = resolve_auth(&settings.dst)?;
+    let src_auth = resolve_auth(&settings.src).await?;
+    let dst_auth = resolve_auth(&settings.dst).await?;
 
     let mut src = Client::connect_and_auth(
         ConnectParams {
@@ -375,7 +375,7 @@ pub async fn run_migration(settings: &Settings, reporter: &Reporter) -> Result<M
     Ok(report)
 }
 
-fn resolve_auth(ep: &EndpointSettings) -> Result<Auth> {
+async fn resolve_auth(ep: &EndpointSettings) -> Result<Auth> {
     match &ep.auth {
         crate::config::AuthMethod::Login { .. } => from_login(&ep.user, &ep.auth)
             .ok_or_else(|| Error::Config("internal: login resolution failed".into())),
@@ -401,13 +401,18 @@ fn resolve_auth(ep: &EndpointSettings) -> Result<Auth> {
             } else {
                 Provider::from_str(provider_kind)?
             };
-            let creds = obtain_token(OAuthRequest {
+            // obtain_token does blocking I/O (HTTP + tiny_http listener), so we
+            // must run it off the async executor thread.
+            let req = OAuthRequest {
                 provider,
-                user: &ep.user,
-                client_id,
-                client_secret: client_secret.as_deref(),
+                user: ep.user.clone(),
+                client_id: client_id.clone(),
+                client_secret: client_secret.clone(),
                 use_keyring: *use_keyring,
-            })?;
+            };
+            let creds = tokio::task::spawn_blocking(move || obtain_token(req))
+                .await
+                .map_err(|e| Error::OAuth(format!("oauth task panicked: {e}")))??;
             Ok(Auth::XOAuth2 {
                 user: ep.user.clone(),
                 access_token: creds.access_token,
