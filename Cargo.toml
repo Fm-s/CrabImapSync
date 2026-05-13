@@ -9,6 +9,10 @@ readme = "README.md"
 keywords = ["imap", "email", "migration", "sync"]
 categories = ["command-line-utilities", "email"]
 
+[lib]
+name = "crab_imap_sync"
+path = "src/lib.rs"
+
 [[bin]]
 name = "crab-imap-sync"
 path = "src/main.rs"
