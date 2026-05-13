@@ -203,7 +203,13 @@ impl Client {
     pub async fn fetch_all_message_ids(&mut self) -> Result<std::collections::HashSet<String>> {
         use futures::TryStreamExt;
         let mut ids = std::collections::HashSet::new();
-        let mut stream = self.session.uid_fetch("1:*", "BODY.PEEK[HEADER]").await?;
+        // Use the narrower HEADER.FIELDS form to avoid downloading entire headers.
+        // imap-proto 0.16 maps both BODY[HEADER] and BODY[HEADER.FIELDS (...)] to
+        // SectionPath::Full(MessageSection::Header), so msg.header() still works.
+        let mut stream = self
+            .session
+            .uid_fetch("1:*", "BODY.PEEK[HEADER.FIELDS (MESSAGE-ID)]")
+            .await?;
         while let Some(msg) = stream.try_next().await? {
             if let Some(header) = msg.header() {
                 if let Some(mid) = parse_message_id(header) {
@@ -217,12 +223,14 @@ impl Client {
     /// Lightweight: fetch only the Message-Id header for one UID.
     /// Used for dedup checks before deciding whether to download the body.
     /// IMPORTANT: fully drain the stream to keep IMAP session state coherent.
+    /// Uses BODY.PEEK[HEADER.FIELDS (MESSAGE-ID)] to minimise bandwidth — imap-proto
+    /// maps both HEADER and HEADER.FIELDS to the same SectionPath so msg.header() works.
     pub async fn fetch_message_id_by_uid(&mut self, uid: u32) -> Result<Option<String>> {
         use futures::TryStreamExt;
         let seq = format!("{uid}");
         let messages: Vec<_> = self
             .session
-            .uid_fetch(seq, "BODY.PEEK[HEADER]")
+            .uid_fetch(seq, "BODY.PEEK[HEADER.FIELDS (MESSAGE-ID)]")
             .await?
             .try_collect()
             .await?;
