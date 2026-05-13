@@ -31,9 +31,7 @@ impl Provider {
     pub fn default_scope(&self) -> &str {
         match self {
             Self::Gmail => "https://mail.google.com/",
-            Self::Microsoft => {
-                "https://outlook.office.com/IMAP.AccessAsUser.All offline_access"
-            }
+            Self::Microsoft => "https://outlook.office.com/IMAP.AccessAsUser.All offline_access",
             Self::Custom { scope, .. } => scope,
         }
     }
@@ -205,12 +203,11 @@ pub fn obtain_token(req: OAuthRequest<'_>) -> Result<OAuthCreds> {
 
     // Respond to the browser
     let html = "<html><body><h1>Authentication successful!</h1><p>You may close this tab.</p></body></html>";
-    let response = tiny_http::Response::from_string(html)
-        .with_header(
-            "Content-Type: text/html"
-                .parse::<tiny_http::Header>()
-                .unwrap(),
-        );
+    let response = tiny_http::Response::from_string(html).with_header(
+        "Content-Type: text/html"
+            .parse::<tiny_http::Header>()
+            .unwrap(),
+    );
     let _ = request.respond(response);
 
     let code = code_param.ok_or_else(|| Error::OAuth("no code in callback".into()))?;

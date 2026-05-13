@@ -49,13 +49,15 @@ impl Client {
             .map_err(|e| Error::Network(format!("reading greeting: {e}")))?;
 
         let session = match auth {
-            Auth::Login { user, password } => client
-                .login(user, password)
-                .await
-                .map_err(|(e, _)| Error::Auth {
-                    user: user.clone(),
-                    reason: e.to_string(),
-                })?,
+            Auth::Login { user, password } => {
+                client
+                    .login(user, password)
+                    .await
+                    .map_err(|(e, _)| Error::Auth {
+                        user: user.clone(),
+                        reason: e.to_string(),
+                    })?
+            }
             Auth::XOAuth2 { user, access_token } => {
                 authenticate_xoauth2(client, user, access_token).await?
             }
@@ -195,10 +197,7 @@ impl Client {
     pub async fn fetch_all_message_ids(&mut self) -> Result<std::collections::HashSet<String>> {
         use futures::TryStreamExt;
         let mut ids = std::collections::HashSet::new();
-        let mut stream = self
-            .session
-            .uid_fetch("1:*", "BODY.PEEK[HEADER]")
-            .await?;
+        let mut stream = self.session.uid_fetch("1:*", "BODY.PEEK[HEADER]").await?;
         while let Some(msg) = stream.try_next().await? {
             if let Some(header) = msg.header() {
                 if let Some(mid) = parse_message_id(header) {
@@ -214,7 +213,7 @@ impl Client {
         let seq = format!("{uid}");
         let query = "(BODY.PEEK[] INTERNALDATE FLAGS BODY.PEEK[HEADER])";
         let mut stream = self.session.uid_fetch(seq, query).await?;
-        while let Some(msg) = stream.try_next().await? {
+        if let Some(msg) = stream.try_next().await? {
             let body = msg.body().map(|b| b.to_vec()).unwrap_or_default();
             let internal_date = msg.internal_date();
             let flags: Vec<String> = msg.flags().map(flag_to_imap_string).collect();
@@ -241,15 +240,9 @@ impl Client {
         } else {
             Some(format!("({})", flags.join(" ")))
         };
-        let date_str = internal_date
-            .map(|dt| dt.format("%d-%b-%Y %H:%M:%S %z").to_string());
+        let date_str = internal_date.map(|dt| dt.format("%d-%b-%Y %H:%M:%S %z").to_string());
         self.session
-            .append(
-                folder,
-                flag_str.as_deref(),
-                date_str.as_deref(),
-                body,
-            )
+            .append(folder, flag_str.as_deref(), date_str.as_deref(), body)
             .await?;
         Ok(())
     }

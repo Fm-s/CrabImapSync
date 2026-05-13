@@ -129,9 +129,7 @@ impl EndpointInputs {
                     ))
                 })?;
                 let password = std::env::var(&envvar).map_err(|_| {
-                    Error::Config(format!(
-                        "env var '{envvar}' for {side} password is not set"
-                    ))
+                    Error::Config(format!("env var '{envvar}' for {side} password is not set"))
                 })?;
                 AuthMethod::Login { password }
             }

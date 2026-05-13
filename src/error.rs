@@ -24,7 +24,11 @@ pub enum Error {
     OAuth(String),
 
     #[error("message append failed for folder {folder} uid {uid}: {reason}")]
-    Append { folder: String, uid: u32, reason: String },
+    Append {
+        folder: String,
+        uid: u32,
+        reason: String,
+    },
 }
 
 pub type Result<T> = std::result::Result<T, Error>;
