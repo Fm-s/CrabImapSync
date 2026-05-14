@@ -16,14 +16,14 @@ CrabImapSync transfers messages one at a time. Peak memory stays around
 ## Install
 
 ```bash
-cargo install --git https://github.com/felipemsouza/crab-imap-sync
+cargo install --git https://github.com/Fm-s/CrabImapSync
 ```
 
 Or from source:
 
 ```bash
-git clone https://github.com/felipemsouza/crab-imap-sync
-cd crab-imap-sync
+git clone https://github.com/Fm-s/CrabImapSync
+cd CrabImapSync
 cargo build --release
 # binary at target/release/crab-imap-sync
 ```
@@ -100,6 +100,11 @@ your OS keyring so subsequent runs skip the browser.
 
 v0.1 — usable for plain LOGIN migrations. OAuth2 PKCE flow implemented but
 not yet auto-tested. Integration tests against Dovecot containers pending.
+
+## Support
+
+If CrabImapSync saved your migration, you can
+[buy me a coffee ☕](https://buymeacoffee.com/femsz).
 
 ## License
 

@@ -13,7 +13,7 @@ CrabImapSync stays under 200 MB regardless of mailbox size.
 ## Quick start
 
 ```bash
-cargo install --git https://github.com/felipemsouza/crab-imap-sync
+cargo install --git https://github.com/Fm-s/CrabImapSync
 
 export SRC_PASS='...'
 export DST_PASS='...'
@@ -24,14 +24,14 @@ crab-imap-sync \
 ```
 
 Or download the prebuilt macOS binary from
-[Releases](https://github.com/felipemsouza/crab-imap-sync/releases/latest).
+[Releases](https://github.com/Fm-s/CrabImapSync/releases/latest).
 
 ## Documentation
 
 - [OAuth2 setup (Gmail / Microsoft / custom)](OAUTH2.html)
 - [Smoke test procedure](SMOKE.html)
-- [Source code](https://github.com/felipemsouza/crab-imap-sync)
-- [Issue tracker](https://github.com/felipemsouza/crab-imap-sync/issues)
+- [Source code](https://github.com/Fm-s/CrabImapSync)
+- [Issue tracker](https://github.com/Fm-s/CrabImapSync/issues)
 
 ## How it works
 
@@ -55,6 +55,11 @@ Message-Id set (~1 MB for a 13k-message INBOX).
 | Resumable             | yes (UID)      | yes (Message-Id) |
 | OAuth2 (browser PKCE) | yes            | yes          |
 | Maturity              | 20+ years      | new          |
+
+## Support
+
+If CrabImapSync saved your migration, you can
+[buy me a coffee ☕](https://buymeacoffee.com/femsz).
 
 ## License
 
